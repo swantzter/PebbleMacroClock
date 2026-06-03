@@ -1,0 +1,73 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Needed so the release job can upload the .pbw asset to the GitHub release.
+permissions:
+  contents: write
+
+# Don't waste minutes on superseded pushes/PRs (releases run in their own group).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pebble SDK to build against. Bump this to roll forward; it doubles as the
+  # cache key, so changing it pulls a fresh SDK. Use "latest" to always track
+  # the newest SDK (the cache key then won't reflect the actual version).
+  PEBBLE_SDK_VERSION: "4.9.169"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      - run: npm ci
+
+      # `uv tool install` puts the `pebble` binary in ~/.local/bin, which isn't
+      # on PATH by default, so add it for the SDK/build steps below.
+      - name: Install pebble-tool
+        run: |
+          uv tool install pebble-tool --python 3.13
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The SDK + ARM toolchain (~1.5 GB) lives here; cache it across runs.
+      - name: Cache Pebble SDK
+        id: cache-sdk
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/share/pebble-sdk/SDKs
+          key: pebble-sdk-${{ env.PEBBLE_SDK_VERSION }}
+
+      - name: Install Pebble SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: pebble sdk install "$PEBBLE_SDK_VERSION"
+
+      - run: pebble build
+
+      # Always available from the run's Artifacts section.
+      - name: Upload .pbw artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macro-clock-pbw
+          path: build/*.pbw
+          if-no-files-found: error
+
+      # Only on a published release: attach the .pbw to that release.
+      - name: Attach .pbw to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" build/*.pbw --clobber

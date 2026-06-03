@@ -1,8 +1,8 @@
 {
+    "name": "@swantzter/macro-clock",
     "author": "Swantzter",
     "version": "2.6.0",
     "keywords": [],
-    "name": "macro-clock",
     "pebble": {
         "capabilities": [
             "configurable"
