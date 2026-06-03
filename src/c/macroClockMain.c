@@ -61,8 +61,14 @@ const int clockUnit = 30;
 
 static Window *s_main_window;
 
-static TextLayer * s_time_layer;
-static TextLayer * s_time_layer2;
+// Hour-number layers. Each shows the hour at HOUR_OFFSETS[i] relative to the
+// current hour, positioned at its mark on the macro clock. Offset -1 keeps the
+// just-passed hour visible and +2 brings the upcoming hour in early, so up to
+// three numbers fall within the visible area at once on the larger emery screen.
+#define HOUR_LAYER_COUNT 4
+static const int HOUR_OFFSETS[HOUR_LAYER_COUNT] = { -1, 0, 1, 2 };
+static TextLayer * s_hour_layers[HOUR_LAYER_COUNT];
+static char s_hour_buffers[HOUR_LAYER_COUNT][3];
 static TextLayer * s_date_layer;
 static TextLayer * s_date_layer2;
 
@@ -72,8 +78,6 @@ static GPath * s_line_path;
 static Layer * topPathLayer;
 static Layer * botPathLayer;
 
-static Layer * timeLayer;
-static Layer * timeLayer2;
 static Layer * dateLayer;
 static Layer * dateLayer2;
 
@@ -84,8 +88,6 @@ static double s_path_angle_adj_rad;
 static int s_hour_angle;
 static double s_hour_angle_adj_rad;
 
-static char buffer[2];
-static char buffer2[2];
 static char dateBuffer[16];
 static char dateBuffer2[9];
 
@@ -280,6 +282,40 @@ static void dot_layer_update_callback(Layer *layer, GContext *ctx) {
 	graphics_fill_circle(ctx, postPostDot3, 3);
 }
 
+// Format hour24 (0-23) into buf per the 12h/24h setting, without a leading zero.
+static void set_hour_text(TextLayer *layer, char *buf, size_t size, int hour24) {
+	int value;
+	if (settings.hourFormat) {
+		value = hour24;
+	}
+	else {
+		value = hour24 % 12;
+		if (value == 0) {
+			value = 12;
+		}
+	}
+	snprintf(buf, size, "%d", value);
+	text_layer_set_text(layer, buf);
+}
+
+// Position one hour-number layer at its mark on the macro clock (relative to the
+// hour hand at timeX/timeY) and set its digits. Caller must have refreshed the
+// s_hour_angle_adj_rad global for the current time first.
+static void update_hour_layer(int i, int currHour, double timeX, double timeY) {
+	int offset = HOUR_OFFSETS[i];
+	double markX = getCos(s_hour_angle_adj_rad - offset * (M_PI / 6)) * radius;
+	double markY = getSin(s_hour_angle_adj_rad - offset * (M_PI / 6)) * radius;
+
+	int xPos = (markX - timeX) + midWidth;
+	int yPos = (timeY - markY) + midHeight;
+
+	// -5 / width 60 because "20" doesn't fit in a 50px-wide box otherwise.
+	layer_set_frame(text_layer_get_layer(s_hour_layers[i]), GRect(xPos - 5, yPos, 60, 50));
+
+	int hour24 = ((currHour + offset) % 24 + 24) % 24;
+	set_hour_text(s_hour_layers[i], s_hour_buffers[i], sizeof(s_hour_buffers[i]), hour24);
+}
+
 static void update_time() {
 	time_t tempTime = time(NULL);
 	struct tm * tick_time = localtime(&tempTime);
@@ -288,11 +324,9 @@ static void update_time() {
 	strftime(dateBuffer, sizeof(dateBuffer), "%a, %b %e", tick_time);
 
 	if (settings.hourFormat) {
-		strftime(buffer, sizeof("00"), "%H", tick_time);
 		strftime(dateBuffer2, sizeof("00:00"), "%H:%M", tick_time);
 	}
 	else {
-		strftime(buffer, sizeof("00"), "%I", tick_time);
 		strftime(dateBuffer2, sizeof("00:00 XX"), "%l:%M %p", tick_time);
 	}
 
@@ -312,89 +346,17 @@ static void update_time() {
 		s_hour_angle_adj_rad += (2 * M_PI);
 	}
 
-	if (tick_time->tm_hour == 23) {
-		tick_time->tm_hour = 0;
-	}
-	else {
-		tick_time->tm_hour++;
-	}
-
-	if (settings.hourFormat) {
-		strftime(buffer2, sizeof("00"), "%H", tick_time);
-	}
-	else {
-		strftime(buffer2, sizeof("00"), "%I", tick_time);
-	}
-
 	double timeX = getCos(s_path_angle_adj_rad) * radius;
 	double timeY = getSin(s_path_angle_adj_rad) * radius;
-	double hourX = getCos(s_hour_angle_adj_rad) * radius;
-	double hourY = getSin(s_hour_angle_adj_rad) * radius;
 
-	double hourX2 = getCos(s_hour_angle_adj_rad - (0.5236)) * radius;
-	double hourY2 = getSin(s_hour_angle_adj_rad - (0.5236)) * radius;
-
-	int xPos = -(timeX - hourX) + midWidth;
-	int yPos = -(hourY - timeY) + midHeight;
-
-	int xPos2 = -(timeX - hourX2) + midWidth;
-	int yPos2 = -(hourY2 - timeY) + midHeight;
-
-	//xPos-5 and width=60 because "20" doesn't fit in 50x50 apparently.
-	layer_set_frame(timeLayer, GRect(xPos-5,yPos,60,50));
-	layer_set_frame(timeLayer2, GRect(xPos2-5,yPos2,60,50));
-
-	char * bufferS = buffer+1;
-	char * buffer2S = buffer2+1;
-
-	if (settings.hourFormat) {
-		if (currHour > 9) {
-			text_layer_set_text(s_time_layer, buffer);
-			if (currHour == 23) {
-				text_layer_set_text(s_time_layer2, buffer2S);
-			}
-			else {
-				text_layer_set_text(s_time_layer2, buffer2);
-			}
-		}
-		else {
-			text_layer_set_text(s_time_layer, bufferS);
-
-			if (currHour == 9) {
-				text_layer_set_text(s_time_layer2, buffer2);
-			}
-			else {
-				text_layer_set_text(s_time_layer2, buffer2S);
-			}
-		}
-	}
-	else {
-		if (currHour > 0 && currHour < 10) {
-			text_layer_set_text(s_time_layer, bufferS);
-		}
-		else if (currHour > 12 && currHour < 22) {
-			text_layer_set_text(s_time_layer, bufferS);
-		}
-		else {
-			text_layer_set_text(s_time_layer, buffer);
-		}
-
-		if (currHour >= 0 && currHour < 9) {
-			text_layer_set_text(s_time_layer2, buffer2S);
-		}
-		else if (currHour >= 12 && currHour < 21) {
-			text_layer_set_text(s_time_layer2, buffer2S);
-		}
-		else {
-			text_layer_set_text(s_time_layer2, buffer2);
-		}
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		update_hour_layer(i, currHour, timeX, timeY);
+		layer_mark_dirty(text_layer_get_layer(s_hour_layers[i]));
 	}
 
 	text_layer_set_text(s_date_layer, dateBuffer);
 	text_layer_set_text(s_date_layer2, dateBuffer2);
 
-	layer_mark_dirty(timeLayer);
-	layer_mark_dirty(timeLayer2);
 	layer_mark_dirty(dateLayer);
 	layer_mark_dirty(dateLayer2);
 
@@ -467,17 +429,18 @@ static void prv_update_display() {
 	}
 
 	window_set_background_color(s_main_window, settings.backgroundColor);
-	text_layer_set_background_color(s_time_layer, settings.backgroundColor);
-	text_layer_set_background_color(s_time_layer2, settings.backgroundColor);
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		text_layer_set_background_color(s_hour_layers[i], settings.backgroundColor);
+		text_layer_set_text_color(s_hour_layers[i], settings.hourColor);
+	}
 	text_layer_set_background_color(s_date_layer, settings.backgroundColor);
 	text_layer_set_background_color(s_date_layer2, settings.backgroundColor);
 	text_layer_set_text_color(s_date_layer, settings.hourColor);
 	text_layer_set_text_color(s_date_layer2, settings.hourColor);
-	text_layer_set_text_color(s_time_layer, settings.hourColor);
-	text_layer_set_text_color(s_time_layer2, settings.hourColor);
 
-	layer_mark_dirty(timeLayer);
-	layer_mark_dirty(timeLayer2);
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		layer_mark_dirty(text_layer_get_layer(s_hour_layers[i]));
+	}
 	layer_mark_dirty(s_dot_layer);
 	layer_mark_dirty(s_path_layer);
 	layer_mark_dirty(dateLayer);
@@ -560,11 +523,9 @@ static void main_window_load(Window *window) {
 	strftime(dateBuffer, sizeof(dateBuffer), "%a, %b %e", tick_time);
 
 	if (settings.hourFormat) {
-		strftime(buffer, sizeof("00"), "%H", tick_time);
 		strftime(dateBuffer2, sizeof("00:00"), "%H:%M", tick_time);
 	}
 	else {
-		strftime(buffer, sizeof("00"), "%I", tick_time);
 		strftime(dateBuffer2, sizeof("00:00 XX"), "%l:%M %p", tick_time);
 	}
 
@@ -584,111 +545,32 @@ static void main_window_load(Window *window) {
 		s_hour_angle_adj_rad += (2 * M_PI);
 	}
 
-	if (tick_time->tm_hour == 23) {
-		tick_time->tm_hour = 0;
-	}
-	else {
-		tick_time->tm_hour++;
-	}
-
-	if (settings.hourFormat) {
-		strftime(buffer2, sizeof("00"), "%H", tick_time);
-	}
-	else {
-		strftime(buffer2, sizeof("00"), "%I", tick_time);
-	}
-
 	double timeX = getCos(s_path_angle_adj_rad) * radius;
 	double timeY = getSin(s_path_angle_adj_rad) * radius;
 
-	double hourX = getCos(s_hour_angle_adj_rad) * radius;
-	double hourY = getSin(s_hour_angle_adj_rad) * radius;
-
-	double hourX2 = getCos(s_hour_angle_adj_rad - (M_PI / 6)) * radius;
-	double hourY2 = getSin(s_hour_angle_adj_rad - (M_PI / 6)) * radius;
-
-	int xPos = (hourX - timeX) + midWidth;
-	int yPos = (timeY - hourY) + midHeight;
-
-	int xPos2 = (hourX2 - timeX) + midWidth;
-	int yPos2 = (timeY - hourY2) + midHeight;
-
-	char * bufferS = buffer+1;
-	char * buffer2S = buffer2+1;
-
-	s_time_layer = text_layer_create(GRect(xPos-5, yPos, 60, 50));
-	text_layer_set_background_color(s_time_layer, settings.backgroundColor);
-	text_layer_set_text_color(s_time_layer, settings.hourColor);
-
-	s_time_layer2 = text_layer_create(GRect(xPos2-5, yPos2, 60, 50));
-	text_layer_set_background_color(s_time_layer2, settings.backgroundColor);
-	text_layer_set_text_color(s_time_layer2, settings.hourColor);
+	// Hour-number layers: created here, then positioned and filled per offset.
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		s_hour_layers[i] = text_layer_create(GRect(0, 0, 60, 50));
+		text_layer_set_background_color(s_hour_layers[i], settings.backgroundColor);
+		text_layer_set_text_color(s_hour_layers[i], settings.hourColor);
+		text_layer_set_font(s_hour_layers[i], fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+		text_layer_set_text_alignment(s_hour_layers[i], GTextAlignmentCenter);
+		update_hour_layer(i, currHour, timeX, timeY);
+	}
 
 	s_date_layer = text_layer_create(GRect(0, 0, bounds.size.w, DATE_BAR_HEIGHT));
 	text_layer_set_background_color(s_date_layer, settings.backgroundColor);
 	text_layer_set_text_color(s_date_layer, settings.hourColor);
+	text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
+	text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
 	text_layer_set_text(s_date_layer, dateBuffer);
 
 	s_date_layer2 = text_layer_create(GRect(0, bounds.size.h - DATE_BAR_HEIGHT, bounds.size.w, DATE_BAR_HEIGHT));
 	text_layer_set_background_color(s_date_layer2, settings.backgroundColor);
 	text_layer_set_text_color(s_date_layer2, settings.hourColor);
-	text_layer_set_text(s_date_layer2, dateBuffer2);
-
-
-	if (settings.hourFormat) {
-		if (currHour > 9) {
-			text_layer_set_text(s_time_layer, buffer);
-			if (tick_time->tm_hour == 0) {
-				text_layer_set_text(s_time_layer2, buffer2S);
-			}
-			else {
-				text_layer_set_text(s_time_layer2, buffer2);
-			}
-		}
-		else {
-			text_layer_set_text(s_time_layer, bufferS);
-
-			if (currHour == 9) {
-				text_layer_set_text(s_time_layer2, buffer2);
-			}
-			else {
-				text_layer_set_text(s_time_layer2, buffer2S);
-			}
-		}
-	}
-	else {
-		if (currHour > 0 && currHour < 10) {
-			text_layer_set_text(s_time_layer, bufferS);
-		}
-		else if (currHour > 12 && currHour < 22) {
-			text_layer_set_text(s_time_layer, bufferS);
-		}
-		else {
-			text_layer_set_text(s_time_layer, buffer);
-		}
-
-		if (currHour >= 0 && currHour < 9) {
-			text_layer_set_text(s_time_layer2, buffer2S);
-		}
-		else if (currHour >= 12 && currHour < 21) {
-			text_layer_set_text(s_time_layer2, buffer2S);
-		}
-		else {
-			text_layer_set_text(s_time_layer2, buffer2);
-		}
-	}
-
-	text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-	text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
-
-	text_layer_set_font(s_time_layer2, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-	text_layer_set_text_alignment(s_time_layer2, GTextAlignmentCenter);
-
-	text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
-	text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
-
 	text_layer_set_font(s_date_layer2, fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21));
 	text_layer_set_text_alignment(s_date_layer2, GTextAlignmentCenter);
+	text_layer_set_text(s_date_layer2, dateBuffer2);
 
 	s_dot_layer = layer_create(bounds);
 	layer_set_update_proc(s_dot_layer, dot_layer_update_callback);
@@ -702,20 +584,20 @@ static void main_window_load(Window *window) {
 	botPathLayer = layer_create(bounds);
 	layer_set_update_proc(botPathLayer, bot_line_layer_update_callback);
 
-	layer_add_child(window_get_root_layer(window), text_layer_get_layer(s_time_layer));
-	layer_add_child(window_get_root_layer(window), text_layer_get_layer(s_time_layer2));
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		layer_add_child(window_layer, text_layer_get_layer(s_hour_layers[i]));
+	}
 
 	layer_add_child(window_layer, s_dot_layer);
 	layer_add_child(window_layer, s_path_layer);
 
-	layer_add_child(window_get_root_layer(window), text_layer_get_layer(s_date_layer));
-	layer_add_child(window_get_root_layer(window), text_layer_get_layer(s_date_layer2));
-
+	layer_add_child(window_layer, text_layer_get_layer(s_date_layer));
+	layer_add_child(window_layer, text_layer_get_layer(s_date_layer2));
 
 	layer_add_child(window_layer, topPathLayer);
 	layer_add_child(window_layer, botPathLayer);
 
-	// Move all paths to the center of the screen
+	// Move the clock hand pivot to the center of the screen
 	gpath_move_to(s_line_path, GPoint(bounds.size.w/2, bounds.size.h/2));
 }
 
@@ -724,10 +606,11 @@ static void main_window_unload(Window *window) {
 	layer_destroy(s_dot_layer);
 	layer_destroy(topPathLayer);
 	layer_destroy(botPathLayer);
-	layer_destroy(timeLayer);
-	layer_destroy(timeLayer2);
-	layer_destroy(dateLayer);
-	layer_destroy(dateLayer2);
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		text_layer_destroy(s_hour_layers[i]);
+	}
+	text_layer_destroy(s_date_layer);
+	text_layer_destroy(s_date_layer2);
 }
 
 static void init() {
@@ -751,8 +634,6 @@ static void init() {
 	app_message_register_inbox_dropped(in_dropped_handler);
 	app_message_open(128, 128);
 
-	timeLayer = text_layer_get_layer(s_time_layer);
-	timeLayer2 = text_layer_get_layer(s_time_layer2);
 	dateLayer = text_layer_get_layer(s_date_layer);
 	dateLayer2 = text_layer_get_layer(s_date_layer2);
 
@@ -777,8 +658,9 @@ static void init() {
 	layer_insert_above_sibling(topPathLayer, dateLayer);
 	layer_insert_above_sibling(botPathLayer, dateLayer2);
 
-	layer_mark_dirty(timeLayer);
-	layer_mark_dirty(timeLayer2);
+	for (int i = 0; i < HOUR_LAYER_COUNT; i++) {
+		layer_mark_dirty(text_layer_get_layer(s_hour_layers[i]));
+	}
 	layer_mark_dirty(s_dot_layer);
 	layer_mark_dirty(s_path_layer);
 	layer_mark_dirty(topPathLayer);
