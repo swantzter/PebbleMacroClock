@@ -15,3 +15,5 @@ Configurable:
 - Date banner (off, on flick, always)
 - Digital time banner (off, on flick, always)
 - 12h or 24h format
+
+[1]: https://github.com/shamHu/PebbleMacroClock
