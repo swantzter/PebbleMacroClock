@@ -1,0 +1,5 @@
+.*
+!.gitignore
+old/
+node_modules/
+build/

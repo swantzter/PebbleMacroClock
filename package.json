@@ -1,0 +1,43 @@
+{
+    "author": "Swantzter",
+    "version": "2.6.0",
+    "keywords": [],
+    "name": "macro-clock",
+    "pebble": {
+        "capabilities": [
+            "configurable"
+        ],
+        "displayName": "Macro Clock",
+        "enableMultiJS": true,
+        "messageKeys": [
+            "backgroundColor",
+            "hourColor",
+            "handColor",
+            "dotColor",
+            "handOutlineColor",
+            "hourFormat",
+            "dateToggle",
+            "digTimeToggle"
+        ],
+        "projectType": "native",
+        "resources": {
+            "media": []
+        },
+        "sdkVersion": "3",
+        "targetPlatforms": [
+            "basalt",
+            "emery"
+        ],
+        "uuid": "645fb654-ad24-418f-99c2-9b601c232394",
+        "watchapp": {
+            "watchface": true
+        }
+    },
+    "devDependencies": {
+        "eslint": "^9.39.4",
+        "neostandard": "^0.13.0"
+    },
+    "dependencies": {
+        "@rebble/clay": "^1.0.10"
+    }
+}
